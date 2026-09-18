@@ -7,6 +7,7 @@ Place in: %APPDATA%\\Hex-Rays\\IDA Pro\\plugins\\  (Windows)
 
 Hotkeys:  Ctrl+Shift+A  -- toggle anonymizer
           Ctrl+Shift+N  -- toggle shadow mode (ntdll overlay)
+          Ctrl+Shift+D  -- open settings dialog
           Edit > Plugins > Discord RPC  -- settings dialog
 
 Discord Developer Portal: https://discord.com/developers/applications
@@ -49,16 +50,17 @@ CONFIG = {
     "large_image":           "ida_logo",
     "large_text":            "IDA Pro 9.x",
 
-    "anonymize":             True,
-    "shadow_mode":           True,
-    "show_arch":             True,
-    "show_segment":          True,
-    "show_view":             True,
-    "show_func_count":       True,
-    "show_progress_bar":     True,
-    "show_func_size":        True,
-    "show_xrefs":            True,
-    "show_time_on_func":     True,
+    "anonymize":             False,
+    "shadow_mode":           False,
+    "show_func_name":        False,
+    "show_arch":             False,
+    "show_segment":          False,
+    "show_view":             False,
+    "show_func_count":       False,
+    "show_progress_bar":     False,
+    "show_func_size":        False,
+    "show_xrefs":            False,
+    "show_time_on_func":     False,
 
     "afk_threshold_s":       300,
     "func_count_interval_s": 15.0,
@@ -369,6 +371,11 @@ def _show_config_dialog(plugin: "DiscordRPCPlugin") -> None:
                 lay_fn = QtWidgets.QVBoxLayout(grp_fn)
                 lay_fn.setSpacing(4)
 
+                chk_fname = QtWidgets.QCheckBox("Function name  (sub_1400010A0)")
+                chk_fname.setChecked(CONFIG["show_func_name"])
+                lay_fn.addWidget(chk_fname)
+                self._checks["show_func_name"] = chk_fname
+
                 self._chk_bar   = QtWidgets.QCheckBox("Progress bar  [████░░] 67%")
                 self._chk_count = QtWidgets.QCheckBox("Function counter  (X / Y named)")
                 self._chk_bar.setChecked(CONFIG["show_progress_bar"])
@@ -396,6 +403,71 @@ def _show_config_dialog(plugin: "DiscordRPCPlugin") -> None:
                     lay_fn.addWidget(chk)
                     self._checks[key] = chk
                 root.addWidget(grp_fn)
+
+                grp_time = QtWidgets.QGroupBox("Time")
+                lay_time = QtWidgets.QVBoxLayout(grp_time)
+                lay_time.setSpacing(4)
+
+                sess_elapsed = int(time.time() - plugin.start_time)
+                self._sess_lbl = QtWidgets.QLabel(
+                    f"Session elapsed:  <b>{_fmt_duration(sess_elapsed)}</b>"
+                )
+                lay_time.addWidget(self._sess_lbl)
+
+                sess_row = QtWidgets.QHBoxLayout()
+                sess_row.addWidget(QtWidgets.QLabel("Set to:"))
+                self._sess_h = QtWidgets.QSpinBox()
+                self._sess_h.setRange(0, 999)
+                self._sess_h.setSuffix(" h")
+                self._sess_h.setValue(sess_elapsed // 3600)
+                self._sess_m = QtWidgets.QSpinBox()
+                self._sess_m.setRange(0, 59)
+                self._sess_m.setSuffix(" m")
+                self._sess_m.setValue((sess_elapsed % 3600) // 60)
+                btn_sess_set = QtWidgets.QPushButton("Set")
+                btn_sess_set.setFixedWidth(60)
+                btn_sess_set.clicked.connect(self._on_set_session_time)
+                sess_row.addWidget(self._sess_h)
+                sess_row.addWidget(self._sess_m)
+                sess_row.addWidget(btn_sess_set)
+                sess_row.addStretch()
+                lay_time.addLayout(sess_row)
+
+                sep_time = QtWidgets.QFrame()
+                sep_time.setFrameShape(QtWidgets.QFrame.HLine)
+                sep_time.setFrameShadow(QtWidgets.QFrame.Sunken)
+                lay_time.addWidget(sep_time)
+
+                has_func     = bool(plugin._tracking_func)
+                func_elapsed = int(time.time() - plugin._func_since) if has_func else 0
+                self._func_lbl = QtWidgets.QLabel(
+                    f"Function elapsed:  <b>"
+                    f"{_fmt_duration(func_elapsed) if has_func else '—'}</b>"
+                )
+                lay_time.addWidget(self._func_lbl)
+
+                func_row = QtWidgets.QHBoxLayout()
+                func_row.addWidget(QtWidgets.QLabel("Set to:"))
+                self._func_h = QtWidgets.QSpinBox()
+                self._func_h.setRange(0, 999)
+                self._func_h.setSuffix(" h")
+                self._func_h.setValue(func_elapsed // 3600)
+                self._func_h.setEnabled(has_func)
+                self._func_m = QtWidgets.QSpinBox()
+                self._func_m.setRange(0, 59)
+                self._func_m.setSuffix(" m")
+                self._func_m.setValue((func_elapsed % 3600) // 60)
+                self._func_m.setEnabled(has_func)
+                btn_func_set = QtWidgets.QPushButton("Set")
+                btn_func_set.setFixedWidth(60)
+                btn_func_set.setEnabled(has_func)
+                btn_func_set.clicked.connect(self._on_set_func_time)
+                func_row.addWidget(self._func_h)
+                func_row.addWidget(self._func_m)
+                func_row.addWidget(btn_func_set)
+                func_row.addStretch()
+                lay_time.addLayout(func_row)
+                root.addWidget(grp_time)
 
                 grp_priv = QtWidgets.QGroupBox("Privacy & Style")
                 lay_priv = QtWidgets.QVBoxLayout(grp_priv)
@@ -457,6 +529,26 @@ def _show_config_dialog(plugin: "DiscordRPCPlugin") -> None:
             def _ok(self):
                 self._apply()
                 self.accept()
+
+            def _on_set_session_time(self):
+                secs = self._sess_h.value() * 3600 + self._sess_m.value() * 60
+                self._plugin.start_time = time.time() - secs
+                self._plugin.last_func  = ""
+                self._plugin.update_presence(force=True)
+                self._sess_lbl.setText(
+                    f"Session elapsed:  <b>{_fmt_duration(secs)}</b>"
+                )
+
+            def _on_set_func_time(self):
+                if not self._plugin._tracking_func:
+                    return
+                secs = self._func_h.value() * 3600 + self._func_m.value() * 60
+                self._plugin._func_since = time.time() - secs
+                self._plugin.last_func   = ""
+                self._plugin.update_presence(force=True)
+                self._func_lbl.setText(
+                    f"Function elapsed:  <b>{_fmt_duration(secs)}</b>"
+                )
 
             def _on_reconnect(self):
                 self._plugin._try_connect()
@@ -568,7 +660,7 @@ class DiscordRPCPlugin(ida_idaapi.plugin_t):
     comment       = "Discord Rich Presence Integration"
     help          = "Shows current IDA session in Discord. Edit > Plugins > Discord RPC for settings."
     wanted_name   = "Discord RPC"
-    wanted_hotkey = ""
+    wanted_hotkey = "Ctrl+Shift+D"
 
     def __init__(self):
         try:
@@ -935,21 +1027,6 @@ class DiscordRPCPlugin(ida_idaapi.plugin_t):
                     )
                 return
 
-            if self._is_afk:
-                idle_str = _fmt_duration(now - self._last_movement)
-                key      = f"__afk_{idle_str}"
-                if self.last_func != key:
-                    self.last_func        = key
-                    self.last_update_time = now
-                    rpc.update(
-                        details     = "idle",
-                        state       = f"away for {idle_str}",
-                        large_image = CONFIG["large_image"],
-                        large_text  = CONFIG["large_text"],
-                        start       = self.start_time,
-                    )
-                return
-
             ea = ida_kernwin.get_screen_ea()
             if ea == idc.BADADDR:
                 return
@@ -1040,7 +1117,7 @@ class DiscordRPCPlugin(ida_idaapi.plugin_t):
                 f"{display_file}  ({' · '.join(badges)})" if badges else display_file
             )
 
-            parts = [display_func]
+            parts = [display_func] if CONFIG["show_func_name"] else []
 
             if CONFIG["show_func_size"] and fsize > 0:
                 parts.append(f"0x{fsize:X}")
@@ -1056,13 +1133,17 @@ class DiscordRPCPlugin(ida_idaapi.plugin_t):
             if CONFIG["show_time_on_func"] and self._tracking_func:
                 parts.append(f"· {_fmt_duration(now - self._func_since)}")
 
-            rpc.update(
+            kwargs = dict(
                 details     = details[:128],
-                state       = "  ".join(parts)[:128],
                 large_image = CONFIG["large_image"],
                 large_text  = CONFIG["large_text"],
                 start       = self.start_time,
             )
+            state = "  ".join(parts)[:128]
+            if state:
+                kwargs["state"] = state
+
+            rpc.update(**kwargs)
 
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
             self._mark_disconnected()
